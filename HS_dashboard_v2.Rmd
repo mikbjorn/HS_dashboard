@@ -1,0 +1,1226 @@
+---
+title: "High School Dashboard"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: columns
+    vertical_layout: fill
+runtime: shiny 
+---
+
+<style>
+
+.navbar {
+background-color: #7F3800;
+color: #fff;
+border-color: #7F3800
+}
+
+.navbar-brand {
+color:#fff!important;
+}
+
+
+.navbar-nav li a:hover, .navbar-nav > .active > a {
+color: #fff !important;
+
+background-color:#B35701 !important;
+background-image: none !important;
+}
+
+div.dt-buttons {
+    float: right;
+}
+
+.chart-wrapper {
+background: #f2f5f7;
+font-size : 15px;
+border-radius: 10px;
+}
+
+body{
+background: #3c4858;
+font-size: 15px;
+}
+
+.chart-title {
+    font-size: 15px;
+    color: #fff;
+    background-color: #7F3800;
+    border-radius: inherit;
+}
+
+</style>
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(dpi = 300)
+library(flexdashboard)
+library(tidyverse)
+library(readr)
+library(stringr)
+library(lubridate)
+library(colorspace)
+library(DT)
+library(ggmosaic)
+library(shiny)
+```
+
+
+```{r functions}
+## reset all timeseries 
+reset <- function(){
+  ts1<- readRDS("aca1_ts.RDS")
+  ts1<- ts1[0,]
+  saveRDS(ts1, "aca1_ts.RDS")
+  
+  ts2<- readRDS("aca2_ts.RDS")
+  ts2<- ts2[0,]
+  saveRDS(ts2, "aca2_ts.RDS")
+  
+  ts3<- readRDS("aca3_ts.RDS")
+  ts3<- ts3[0,]
+  saveRDS(ts3, "aca3_ts.RDS")
+  
+  ts4<- readRDS("att_ts.RDS")
+  ts4<- ts4[0,]
+  saveRDS(ts4, "att_ts.RDS")
+
+  ts5<- readRDS("school_ts.RDS")
+  ts5<- ts5[0,]
+  saveRDS(ts5, "school_ts.RDS")
+  }
+
+## not in function
+`%!in%` <- Negate(`%in%`)
+
+## update timeseries
+tsgrades_update <- function(ts_name, new_data, date){
+  grades.df<- readRDS(ts_name)
+  
+  if (date %!in% grades.df$date){
+    grades<- new_data %>% 
+      mutate(grade = substring(grade, 0,1))%>% 
+      group_by(grade)%>% 
+      summarise(n=n())%>%
+      pivot_wider(names_from = grade, values_from = n)
+    
+    grades<- data.frame(date = date, grades)
+    grades.df<- bind_rows(grades.df,grades)
+    saveRDS(grades.df, ts_name)
+    }
+  grades.df
+  }
+
+## plot grade timeseries
+
+tsgrades_plot<- function(grades.df){
+  renderPlot(
+  grades.df %>%
+    pivot_longer(cols = 2:6)%>%
+    ggplot(aes(x=date, y=value, color=name))+
+    geom_point(size=2)+
+    geom_line(size=1)+
+    scale_color_manual(values = rev(pal[c(1,2,4,6,7)]))+
+    theme_classic()+
+    labs(title="", col = "Grade")+
+    expand_limits(x = ymd("2022-01-17"))+
+    scale_x_date(date_breaks = "2 weeks")+
+    theme(axis.title = element_blank(),
+          panel.background = element_rect(fill = greys[4], color = greys[4]),
+          plot.background = element_rect(fill = greys[4], color = greys[4]),
+          legend.background = element_rect(fill = greys[4], color = greys[4]),
+          legend.box.background = element_rect(fill = greys[4], color = greys[4])))
+}
+
+## Grades Bar graph
+grades_bar<- function(df_full){
+  p<- df_full%>% mutate(grade = substring(grade,0,1))%>%
+    ggplot(aes(grade))+
+    geom_bar(fill = pal[1], color = pal[1])+ 
+    geom_text(aes(label=..count..), stat = "count", 
+              vjust = -0.5, size=5)+
+    theme(axis.text.y = element_blank(),
+          axis.ticks = element_blank(),
+          axis.text.x = element_text(size = 14),
+          axis.title = element_blank(),
+          panel.background = element_rect(fill = greys[4], color = greys[4]),
+          plot.background = element_rect(fill = greys[4], color = greys[4]),
+          legend.background = element_rect(fill = greys[4], color = greys[4]),
+          legend.box.background = element_rect(fill = greys[4], color = greys[4]), 
+          panel.grid = element_blank())+ 
+    scale_y_continuous(expand=expansion(mult = c(0, 0.15)))
+  renderPlot(p)
+  }
+
+## plot grade percentage histogram facetted by grade level
+grades_grade<- function(df_full){
+  renderPlot(
+    ggplot(df_full, aes(percent))+
+    geom_histogram(fill = pal[1], color = pal[4], breaks = seq(0,110,10), na.rm = T)+ 
+    scale_x_continuous(breaks = seq(0,110,10),
+                       labels = paste(seq(0,110,10), "%", sep = ""))+
+    theme(axis.text.y = element_blank(),
+          axis.ticks.y = element_blank(),
+          axis.text.x = element_text(size = 14),
+          axis.title = element_blank(),
+          panel.background = element_rect(fill = greys[4], color = greys[4]),
+          plot.background = element_rect(fill = greys[4], color = greys[4]),
+          legend.background = element_rect(fill = greys[4], color = greys[4]),
+          legend.box.background = element_rect(fill = greys[4], color = greys[4]), 
+          panel.grid = element_blank(),
+          strip.background = element_rect(fill = greys[4], color = greys[4]),
+          strip.text = element_text(size = 12, )
+          )+
+    facet_wrap(vars(Grade), ncol = 1))
+}
+
+## group attendence levels
+att_data<- function(new_data){
+  df_att<- new_data%>% 
+    distinct(ID, .keep_all = T)%>%
+    mutate(Attend2 = cut(Attend, breaks = c(0,25,50,60,80,90,100),
+                         labels = paste( "gr", 
+                                         c(0,25,50,60,80,90), 
+                                         sep = "")))
+  df_att
+}
+
+## load and update attendence timeseries
+att_update <- function(att_ts, df_att){
+  att.df<- readRDS(att_ts)
+  
+  if (date %!in% att.df$date){
+    att<- df_att %>% 
+      group_by(Attend2)%>% 
+      summarise(n=n())%>%
+      mutate(n = n/sum(n))%>%
+      pivot_wider(names_from = Attend2, values_from = n)
+    
+    att<- data.frame(date, att)
+    att.df<- bind_rows(att.df,att)
+    saveRDS(att.df, att_ts)
+  }
+  att.df
+}
+
+## attendence timeseries plot
+att_ts_plot<- function(att.df){
+  p<- att.df %>%
+    pivot_longer(cols = 2:ncol(att.df))%>%
+    mutate(name = factor(name, 
+                         levels = c('gr90', 'gr80','gr60',
+                                    'gr50', 'gr25','gr0'  
+                         ),
+                         labels = c(">90%", ">80%", ">60%",
+                                    ">50%", ">25%", ">0%")))%>%
+    filter(!is.na(name))%>%
+    ggplot(aes(x=date, y=value, color=name))+
+    geom_point(size=2)+
+    geom_line(size=1)+
+    scale_color_manual(values = pal)+
+    theme_classic()+
+    labs(col = "Attendance")+
+    expand_limits(x = ymd("2022-01-17"))+
+    theme(axis.title = element_blank(),
+          axis.text = element_text(size = 12),
+          legend.text = element_text(size = 12),
+          legend.title = element_text(size = 14),
+          panel.background = element_rect(fill = greys[4], color = greys[4]),
+          plot.background = element_rect(fill = greys[4], color = greys[4]),
+          legend.background = element_rect(fill = greys[4], color = greys[4]),
+          legend.box.background = element_rect(fill = greys[4], color = greys[4]), 
+          panel.grid = element_blank()
+    )+
+    scale_y_continuous(breaks = seq(0,1,0.1), 
+                       labels = paste(seq(0,100,10), "%", sep = ""))+
+    scale_x_date(date_breaks = "2 weeks")
+  
+  renderPlot(p)
+}
+
+## Attendence by ethnicity plot
+att_eth<- function(df_att){
+  p<- df_att %>% group_by(ETHNICITY, Attend2)%>%
+    summarise(n = n())%>%
+    mutate(n = n/sum(n),
+           Attend2 = factor(Attend2, 
+                            levels = c('gr90', 'gr80','gr60',
+                                       'gr50', 'gr25','gr0'  
+                            ),
+                            labels = c(">90%", ">80%", ">60%",
+                                       ">50%", ">25%", ">0%")))%>%
+    ggplot(aes(y = ETHNICITY, x = n, fill = as.factor(Attend2)))+
+    geom_col()+
+    scale_x_continuous(breaks = seq(0,1, 0.1),
+                       labels = paste(seq(0,100, 10), "%", sep = ""))+
+    theme_classic()+
+    labs(fill = "Attendance")+
+    theme(axis.title = element_blank(),
+          legend.position = "right",
+          axis.text.x = element_text(size = 12),
+          axis.text.y = element_text(size = 12),
+          legend.text = element_text(size = 12),
+          legend.title = element_text(size = 14),
+          panel.background = element_rect(fill = greys[4], color = greys[4]),
+          plot.background = element_rect(fill = greys[4], color = greys[4]),
+          legend.background = element_rect(fill = greys[4], color = greys[4]),
+          legend.box.background = element_rect(fill = greys[4], color = greys[4]), 
+          panel.grid = element_blank())+
+    scale_fill_manual(values = rev(pal[1:5]))
+  renderPlot(p)
+}
+
+## Attendence by grade level
+att_grade<- function(df_att){
+  p<- df_att %>% group_by(Grade, Attend2)%>%
+    summarise(n = n())%>%
+    mutate(n = n/sum(n),
+           Attend2 = factor(Attend2, 
+                            levels = c('gr90', 'gr80','gr60',
+                                       'gr50', 'gr25','gr0'  
+                            ),
+                            labels = c(">90%", ">80%", ">60%",
+                                       ">50%", ">25%", ">0%")))%>%
+    ggplot(aes(x = Attend2, y = n, fill = as.factor(Grade)))+
+    geom_col(position = "dodge")+
+    scale_y_continuous(breaks = seq(0,1, 0.1),
+                       labels = paste(seq(0,100, 10), "%", sep = ""))+
+    theme_classic()+
+    labs(fill = "Grade Level",
+         x = "Attendance")+
+    theme(axis.title.y = element_blank(),
+          legend.position = c(.9, .8),
+          axis.text = element_text(size = 12),
+          axis.title.x = element_text(size = 14),
+          legend.text = element_text(size = 12),
+          legend.title = element_text(size = 14),
+          panel.background = element_rect(fill = greys[4], color = greys[4]),
+          plot.background = element_rect(fill = greys[4], color = greys[4]),
+          legend.background = element_rect(fill = greys[4], color = greys[4]),
+          legend.box.background = element_rect(fill = greys[4], color = greys[4]), 
+          panel.grid = element_blank())+
+    scale_fill_manual(values = rev(pal[1:4]))
+  renderPlot(p)
+}
+
+## attendence by iep status
+att_iep<- function(df_att){
+  p<- df_att %>% group_by(IEP, Attend2)%>%
+    summarise(n = n())%>%
+    mutate(n = n/sum(n),
+           Attend2 = factor(Attend2, 
+                            levels = c('gr90', 'gr80','gr60',
+                                       'gr50', 'gr25','gr0'  
+                            ),
+                            labels = c(">90%", ">80%", ">60%",
+                                       ">50%", ">25%", ">0%")),
+           IEP = factor(IEP, levels = c(TRUE, FALSE), labels = c("Yes", "No")))%>%
+    ggplot(aes(x = Attend2, y = n, fill = as.factor(IEP)))+
+    geom_col(position = "dodge")+
+    scale_y_continuous(breaks = seq(0,1, 0.1),
+                       labels = paste(seq(0,100, 10), "%", sep = ""))+
+    theme_classic()+
+    labs(fill = "IEP",
+         x = "Attendance")+
+    theme(axis.title.y = element_blank(),
+          legend.position = c(.9, .8),
+          axis.title.x = element_text(size = 14),
+          axis.text = element_text(size = 12),
+          legend.text = element_text(size = 12),
+          legend.title = element_text(size = 14),
+          panel.background = element_rect(fill = greys[4], color = greys[4]),
+          plot.background = element_rect(fill = greys[4], color = greys[4]),
+          legend.background = element_rect(fill = greys[4], color = greys[4]),
+          legend.box.background = element_rect(fill = greys[4], color = greys[4]), 
+          panel.grid = element_blank())+
+    scale_fill_manual(values = pal[c(2,4)])
+  renderPlot(p)
+}
+
+## histogram number of failing grades per student
+fail_count<- function(df.f){
+  m<-max(df.f %>% group_by(Number_F)%>% summarise(n=n()))
+  renderPlot(
+  ggplot(df.f, aes(Number_F))+
+    geom_histogram(binwidth = 1, color=pal[4], fill=pal[1])+
+    geom_text(aes(label=..count..), stat = "count",
+              vjust=-.5, size=5)+
+    scale_x_continuous(breaks = 0:8)+
+    scale_y_continuous(limits = c(0,m+(0.05*m)))+
+    labs(x="Number of Failing Classes")+
+    theme(plot.title = element_text(size = 18),
+          axis.title.x = element_text(size=16),
+          axis.text.x = element_text(size=14),
+          axis.title.y = element_blank(),
+          axis.text.y = element_blank(),
+          axis.ticks.y = element_blank(),
+          panel.background = element_rect(fill = greys[4], color = greys[4]),
+          plot.background = element_rect(fill = greys[4], color = greys[4]),
+          legend.background = element_rect(fill = greys[4], color = greys[4]),
+          legend.box.background = element_rect(fill = greys[4], color = greys[4]), 
+          panel.grid = element_blank()))
+}
+
+
+## create fail by hour data
+hour_data <- function(df){
+  df.hour<- df%>% count(hour)  
+  
+  df.fails.hour<- df %>% group_by(hour)%>%
+    count(grade) %>% 
+    left_join(df.hour, by = c("hour"))%>%
+    mutate(rel_freq = n.x/n.y) %>% 
+    filter(grade == "F")
+  
+  df.fails.hour
+}
+
+## Fail by hour plot
+fail_hour <- function(df, avg.fail.school, avg.fail.aca = NA){
+  df.hour<- df%>% count(hour)  
+  
+  df.fails.hour<- df %>% group_by(hour)%>%
+    count(grade) %>% 
+    left_join(df.hour, by = c("hour"))%>%
+    mutate(rel_freq = n.x/n.y) %>% 
+    filter(grade == "F")
+  
+  p<- ggplot(df.fails.hour, aes(x= hour, y=rel_freq))+
+    geom_col(fill = pal[1], color = pal[4])+
+    geom_hline(yintercept =avg.fail.school, col = pal[3], size = 1)+
+    geom_text(aes(label = paste(round(rel_freq, 3)*100,"%")), 
+              vjust = -.5, size = 5)+
+    annotate(geom = "text", y= Inf, x=Inf, 
+             label= paste("Avg Fail Rate:",round(avg.fail.school, 3)*100, "%"),
+             vjust=1, hjust=1, color=pal[3], size=4)+
+    scale_x_continuous(breaks = 1:8)+
+    theme(axis.text.y = element_blank(),
+          axis.title.y = element_blank(),
+          axis.ticks = element_blank(),
+          axis.title.x = element_text(size=15),
+          axis.text.x = element_text(size=12),
+          panel.background = element_rect(fill = greys[4], color = greys[4]),
+          plot.background = element_rect(fill = greys[4], color = greys[4]),
+          legend.background = element_rect(fill = greys[4], color = greys[4]),
+          legend.box.background = element_rect(fill = greys[4], color = greys[4]), 
+          panel.grid = element_blank())+
+    scale_y_continuous(expand=expansion(mult = c(0, 0.15)))
+  
+  if (!is.na(avg.fail.aca)){
+    p<- p+
+      geom_hline(yintercept =avg.fail.aca, col = pal[4], size=1)+   
+      annotate(geom = "text", y= Inf, x=.6, 
+               label= paste("Academy Avg Fail Rate:",round(avg.fail.aca, 3)*100, "%"),
+               vjust=1, hjust=0, color= pal[4], size=4)
+  }
+  renderPlot(p)
+}
+
+### grades vs attendence
+grade_att<- function(df){
+  renderPlot(
+  ggplot(df, aes(Attend, as.factor(Number_F), color =as.factor(Number_F) ))+
+    geom_point(position = "jitter", size=2)+
+    theme(legend.position = "none",
+          panel.background = element_rect(fill = greys[4], color = greys[4]),
+          plot.background = element_rect(fill = greys[4], color = greys[4]),
+          legend.background = element_rect(fill = greys[4], color = greys[4]),
+          legend.box.background = element_rect(fill = greys[4], color = greys[4]), 
+          panel.grid = element_blank())+
+    labs(x="Attendance", y="Number of Failing Grades")+
+    scale_x_continuous(breaks = seq(0,100,20),
+                       labels = paste(seq(0,100,20), "%", sep = ""))+
+    scale_color_manual(values = rev(pal)))
+}
+
+## grades by eth
+grades_eth <- function(df, avg.fail.school, avg.fail.aca = NA){
+  df.eth<- df%>% count(ETHNICITY) 
+  
+  df.fails<- df %>% group_by(ETHNICITY)%>%
+    count(grade) %>% 
+    left_join(df.eth, by = c("ETHNICITY"))%>%
+    mutate(rel_freq = n.x/n.y) %>% 
+    filter(grade == "F")
+  
+  
+  p<- ggplot(df.fails, aes(x= ETHNICITY, y=rel_freq))+
+    geom_col(fill = pal[1], color = pal[4])+
+    geom_hline(yintercept =avg.fail.school, col = pal[2], size = 1)+
+    geom_text(aes(label = paste(round(rel_freq, 2)*100,"%")), 
+              vjust = -.5, size = 5)+
+    annotate(geom = "text", y= Inf, x=Inf, 
+             label= paste("Avg Fail Rate:",round(avg.fail.school, 3)*100, "%"),
+             vjust=1, hjust=1, color=pal[2], size=4)+
+    theme(panel.background = element_rect(fill = greys[4], color = greys[4]),
+          plot.background = element_rect(fill = greys[4], color = greys[4]),
+          legend.background = element_rect(fill = greys[4], color = greys[4]),
+          legend.box.background = element_rect(fill = greys[4], color = greys[4]), 
+          panel.grid = element_blank(),
+          axis.text.y = element_blank(),
+          axis.title = element_blank(),
+          axis.ticks = element_blank(),
+          axis.text.x = element_text(size=10, angle = 0))+
+    scale_y_continuous(expand=expansion(mult = c(0, 0.15)))
+  
+  if (!is.na(avg.fail.aca)){
+    p<- p+
+      geom_hline(yintercept =avg.fail.aca, col = pal[4], size=1)+   
+      annotate(geom = "text", y= Inf, x=.6, 
+               label= paste("Academy Avg Fail Rate:",round(avg.fail.aca, 3)*100, "%"),
+               vjust=1, hjust=0, color= pal[4], size=4)
+  }
+  renderPlot(p)
+}
+
+## grades by ELL
+grades_ell<- function(df, avg.fail.school, avg.fail.aca = NA){
+  df.ELL<- df%>% count(ELL)  
+  
+  df.fails.ELL<- df %>% group_by(ELL)%>%
+    count(grade) %>% 
+    left_join(df.ELL, by = c("ELL"))%>%
+    mutate(rel_freq = n.x/n.y) %>% 
+    filter(grade == "F")
+  
+  p<- ggplot(df.fails.ELL, aes(x= ELL, y=rel_freq))+
+    geom_col(fill = pal[1], color = pal[4])+
+    geom_hline(yintercept =avg.fail.school, col = pal[2], size = 1)+
+    geom_text(aes(label = paste(round(rel_freq, 3)*100,"%")), 
+              vjust = -.5, size = 5)+
+    theme(panel.background = element_rect(fill = greys[4], color = greys[4]),
+          plot.background = element_rect(fill = greys[4], color = greys[4]),
+          legend.background = element_rect(fill = greys[4], color = greys[4]),
+          legend.box.background = element_rect(fill = greys[4], color = greys[4]), 
+          panel.grid = element_blank(),
+          axis.text.y = element_blank(),
+          axis.title = element_blank(),
+          axis.ticks = element_blank(),
+          axis.text.x = element_text(size=10))+
+    scale_y_continuous(expand=expansion(mult = c(0, 0.15)))
+  
+  if (!is.na(avg.fail.aca)){
+    p<- p+
+      geom_hline(yintercept =avg.fail.aca, col = pal[4], size=1)
+  }
+  renderPlot(p)
+}
+
+
+## grades by iep
+grades_iep <- function(df, avg.fail.school, avg.fail.aca = NA){
+  df.iep<- df%>% count(IEP)  
+  
+  df.fails.iep<- df %>% group_by(IEP)%>%
+    count(grade) %>% 
+    left_join(df.iep, by = c("IEP"))%>%
+    mutate(rel_freq = n.x/n.y) %>% 
+    filter(grade == "F")
+  
+  p<- ggplot(df.fails.iep, aes(x= IEP, y=rel_freq))+
+    geom_col(fill = pal[1], color = pal[4])+
+    geom_hline(yintercept =avg.fail.school, col = pal[2], size = 1)+
+    geom_text(aes(label = paste(round(rel_freq, 3)*100,"%")), 
+              vjust = -.5, size = 5)+
+    theme(panel.background = element_rect(fill = greys[4], color = greys[4]),
+          plot.background = element_rect(fill = greys[4], color = greys[4]),
+          legend.background = element_rect(fill = greys[4], color = greys[4]),
+          legend.box.background = element_rect(fill = greys[4], color = greys[4]), 
+          panel.grid = element_blank(),
+          axis.text.y = element_blank(),
+          axis.title = element_blank(),
+          axis.ticks = element_blank(),
+          axis.text.x = element_text(size=12))+ 
+    scale_y_continuous(expand=expansion(mult = c(0, 0.15)))
+  
+  if (!is.na(avg.fail.aca)){
+    p<- p+
+      geom_hline(yintercept =avg.fail.aca, col = pal[4], size=1)
+  }
+  renderPlot(p)
+}
+
+
+```
+
+
+```{r data}
+## colors, Blue, red, red2, blue 2, grey1, grey2, #1A1E4B
+#pal <- c("#003399", "#990000", "#800000", "#002266", "#D1D2D4", "#F6F5F2")
+
+# autumn 1
+#pal<- c("#7F3800", "#b35701", "#e06706", "#3c4858", "#a9aaaf", "#dadbdc", "#000000")
+
+#pal<- c("#621B3B",	"#801D30",	"#98531B",	"#B18728",	"#6D6513",	"#3F4610")
+pal<- c("#733300", "#7F3800", "#B35701", "#96570A", 
+        "#795712", "#5C571A", "#3E5622", "#172815")
+greys<- c("#3c4858", "#a9aaaf", "#dadbdc", "#f2f5f7")
+
+## Date
+date<- ymd("2022-03-07")
+
+#reset()
+
+## Data
+df <- read_csv("Data7.csv")[,2:54]
+names(df) <- c("Status", "ID", "Last", "First", "Grade", "Academy", 
+               "PAT", "IEP", "ELL", "ETHNICITY", "INT", "student_email", 
+               "contact_email", "A", "B", "C", "D", "PASSING", "Fail", "Attend", 
+               "Credits", "Teacher1", "Course1", "Gr1", "gr1_perc", "Teacher2", 
+               "Course2", "Gr2", "gr2_perc", "Teacher3", "Course3", "Gr3", 
+               "gr3_perc", "Teacher4", "Course4", "Gr4", "gr4_perc", "Teacher5", 
+               "Course5", "Gr5", "gr5_perc", "Teacher6", "Course6", "Gr6", 
+               "gr6_perc", "Teacher7", "Course7", "Gr7", "gr7_perc", "Teacher8",
+               "Course8", "Gr8", "gr8_perc")
+
+df<- df %>% filter(!is.na(ID)) %>% 
+  mutate(name = paste(First, Last, sep = ""), 
+         IEP = ifelse(is.na(IEP), FALSE, TRUE)) %>%
+  distinct(name, .keep_all = T)%>%
+  select(-c(Status, Last, First, student_email, contact_email,
+            A,B,C,D,Fail, PASSING))%>%
+  mutate(Attend = as.numeric(str_extract(Attend, "[0-9.]+")),
+         Attend = ifelse(Attend >100, 100, Attend),
+         Academy = ifelse(Academy == "Public srv", "Public Srv", Academy))
+
+df_full<-bind_rows(
+df %>% select(c(name, ID, Academy, Grade, PAT, IEP, ELL, ETHNICITY, Attend,
+                Credits, teacher=Teacher1, course=Course1, grade=Gr1,
+                percent=gr1_perc))%>%
+  mutate(hour=1),
+df %>% select(c(name, ID, Academy, Grade, PAT, IEP, ELL, ETHNICITY, Attend,
+                Credits, teacher=Teacher2, course=Course2, grade=Gr2,
+                percent=gr2_perc))%>%
+  mutate(hour=2),
+df %>% select(c(name, ID, Academy, Grade, PAT, IEP, ELL, ETHNICITY, Attend,
+                Credits, teacher=Teacher3, course=Course3, grade=Gr3,
+                percent=gr3_perc))%>% 
+  mutate(hour=3),
+df %>% select(c(name, ID, Academy, Grade, PAT, IEP, ELL, ETHNICITY, Attend,
+                Credits, teacher=Teacher4, course=Course4, grade=Gr4, 
+                percent=gr4_perc))%>%
+  mutate(hour=4),
+df %>% select(c(name, ID, Academy, Grade, PAT, IEP, ELL, ETHNICITY, Attend,
+                Credits, teacher=Teacher5, course=Course5, grade=Gr5, 
+                percent=gr5_perc))%>%
+  mutate(hour=5),
+df %>% select(c(name, ID, Academy, Grade, PAT, IEP, ELL, ETHNICITY, Attend, Credits, 
+                teacher=Teacher6, course=Course6, grade=Gr6, percent=gr6_perc))%>%
+  mutate(hour=6),
+df %>% select(c(name, ID, Academy, Grade, PAT, IEP, ELL, ETHNICITY, Attend, Credits, 
+                teacher=Teacher7, course=Course7, grade=Gr7, percent=gr7_perc))%>%
+  mutate(hour=7),
+df %>% select(c(name, ID, Academy, Grade, PAT, IEP, ELL, ETHNICITY, Attend, Credits, 
+                teacher=Teacher8, course=Course8, grade=Gr8, percent=gr8_perc))%>%
+  mutate(hour=8)) %>% 
+  mutate(grade = ifelse(grade=="_", NA, grade),
+    grade = factor(grade, 
+    levels = c("A", "A-","B+","B","B-","C+","C","C-","D+","D","D-",  "F")),
+    percent = ifelse(percent == "_" | is.na(percent), NA, percent),
+    percent = as.numeric(percent),
+    Attend = as.numeric(str_extract(Attend, "[0-9.]+")),
+    ETHNICITY = ifelse(is.na(ETHNICITY), "U", ETHNICITY),
+    ETHNICITY = factor(ETHNICITY, 
+                       levels = c("A","B", "H", "M", "P", "W", "I", "U"),
+                       labels = c("Asian", "Black", "Hispanic", "Mixed",
+                                  "Pacific Islander", "White", "Indigenous",
+                                  "Unlisted"))
+    )
+
+
+```
+
+
+Grades {data-navmenu="Entire School" data-icon="fa-list"}
+======================================================
+
+
+Column {data-width=650}
+-----------------------------------------------------------------------
+
+
+### Timeseries
+```{r}
+grades.df<- tsgrades_update("school_ts.RDS", df_full, date)
+
+tsgrades_plot(grades.df)
+```
+
+Column {data-width=350}
+-----------------------------------------------------------------------
+
+### Grades 
+
+```{r}
+#summary(df1$grade)
+grades_bar(df_full)
+```
+
+### By Grade level
+
+```{r}
+#summary(df1$grade)
+grades_grade(df_full)
+```
+
+
+Attendance {data-navmenu="Entire School" data-icon="fa-list"}
+=======================================================================
+
+Column {data-width=500}
+-----------------------------------------------------------------------
+### Attendance
+```{r}
+df_att<- att_data(df_full)
+att.df<- att_update("att_ts.RDS", df_att)
+
+#att.df<- att
+
+att_ts_plot(att.df)
+```
+
+### By Ethnicity
+```{r}
+att_eth(df_att)
+```
+
+Column {data-width=500}
+-----------------------------------------------------------------------
+### By Grade
+```{r}
+att_grade(df_att)
+```
+
+### By IEP
+
+```{r}
+att_iep(df_att)
+```
+
+Failing Grades {data-navmenu="Entire School" data-icon="fa-list"}
+=======================================================================
+
+
+Column {data-width=650}
+-----------------------------------------------------------------------
+### Failing Grades per Student
+```{r}
+df.f<-df_full %>% 
+  mutate(grade = substring(grade,0,1))%>%
+  group_by(name)%>%
+  count(grade)%>%
+  pivot_wider(names_from = grade, values_from = n)%>%
+  mutate(across(everything(), ~ifelse(is.na(.x), 0, .x)))%>%
+  select("name", "A", "B", "C", "D", "F")%>%
+  rename(Name = name, Number_F = `F`)%>%
+  inner_join(df%>%select(name,Attend, Academy, Grade), by = c("Name"="name"))
+
+#knitr::kable(df.f)
+
+
+
+fail_count(df.f)
+```
+
+Column {data-width=350}
+-----------------------------------------------------------------------
+
+### Hour
+
+```{r}
+avg.fail.school<- nrow(df_full%>% filter(grade=="F"))/nrow(df_full)
+
+fail_hour(df_full, avg.fail.school)
+```
+
+### Failing Grades Compared to Attendance 
+
+
+```{r}
+grade_att(df.f)
+```
+
+
+
+
+Failing Grades by Demographics {data-navmenu="Entire School" data-icon="fa-list"}
+=========================================================================
+
+Column {data-width=650}
+-----------------------------------------------------------------------
+### Ethnicity
+
+```{r}
+grades_eth(df_full, avg.fail.school)
+```
+
+
+
+Column {data-width=350}
+-----------------------------------------------------------------------
+
+### ELL Status
+
+```{r}
+grades_ell(df_full, avg.fail.school)
+```
+
+### IEP
+
+```{r}
+grades_iep(df_full, avg.fail.school)
+```
+
+Top Students {data-navmenu="Entire School" data-icon="fa-list"}
+===========================================================
+
+```{r}
+df.avg.gr<- df_full %>%
+  mutate(percent = ifelse(percent >100, 100, percent)) %>%
+  group_by(name)%>%
+  summarise(Avg_Grd=mean(percent, na.rm=T))%>%
+  arrange(desc(Avg_Grd))%>%
+  rename(Name = name,
+         `Average Grade` = Avg_Grd)
+
+df.avg.gr %>% 
+  mutate(`Average Grade` = round(`Average Grade`,1))%>%
+datatable(extensions = "Buttons",
+          options = list(dom = "lfrtipB",
+                         buttons = c('copy', 'csv', 'excel', 'pdf', 'print'),
+                         lengthMenu = list(c(10,25,50,-1),
+                                           c(10,25,50,"All"))))%>%
+  formatStyle(names(df.avg.gr)[2], 
+              background = styleColorBar(c(0,100), 'lightblue'),
+              backgroundSize = '98% 60%',
+              backgroundRepeat = 'no-repeat',
+              backgroundPosition = 'center')
+```
+
+Student Data {data-navmenu="Entire School" data-icon="fa-list"}
+=========================================================================
+
+
+```{r}
+df.f1<- df.f %>% rename(`F` = Number_F,
+                Attendance = Attend)%>%
+  select(c(1,9,8,2:7))
+#formattable(df.f, 
+#            align = c("l", "c", "r"),
+#            list(Name = formatter(
+#              "span", style = ~ style(color = "black",font.weight = "bold")),
+#              `Number of Failing Classes` = color_tile(pal[1], pal[2]),
+#              Attendance = color_bar(customGreen0)
+#              ))
+
+brks <- 0:8
+brks2 <- seq(0,100,10)
+clrs1 <- sequential_hcl(n=10, palette = "Greens", rev = T)%>% lighten(amount = 0.25)
+clrs2 <- sequential_hcl(n=10, palette = "OrRd", rev = T)%>% lighten(amount = 0.25)
+clrs3 <- sequential_hcl(n=10, palette = "Reds", rev = T)%>% lighten(amount = 0.25)
+
+datatable(df.f1, filter = 'top', rownames = FALSE, 
+          extensions = "Buttons",
+          options = list(dom = "lrtipB",
+                         buttons = c('copy', 'csv', 'excel', 'pdf', 'print'),
+                         lengthMenu = list(c(10,25,50,-1),
+                                           c(10,25,50,"All")))) %>%
+  formatStyle(names(df.f1)[4:5], backgroundColor = styleInterval(brks, clrs1))%>%
+  formatStyle(names(df.f1)[6:7], backgroundColor = styleInterval(brks, clrs2))%>%
+  formatStyle(names(df.f1)[8], backgroundColor = styleInterval(brks, clrs3))%>%
+  formatStyle(names(df.f1)[9], 
+              background = styleColorBar(c(0,100), "lightblue"),
+              backgroundSize = '98% 70%',
+              backgroundRepeat = 'no-repeat',
+              backgroundPosition = 'center',)
+```
+
+
+
+
+
+Grades {data-navmenu="Academy 1" data-icon="fa-list"}
+======================================================
+
+Column {data-width=650}
+-----------------------------------------------------------------------
+
+### Timeseries
+
+```{r}
+df1 <- df_full %>% filter(Academy == "academy_1")
+grades.df<- tsgrades_update("aca1_ts.RDS", df1, date)
+
+tsgrades_plot(grades.df)
+```
+
+Column {data-width=350}
+-----------------------------------------------------------------------
+
+### Grades 
+
+```{r}
+grades_bar(df1)
+```
+
+### By Grade level
+
+```{r}
+grades_grade(df1)
+```
+
+
+Failing Grades {data-navmenu="Academy 1" data-icon="fa-list"}
+=======================================================================
+
+
+Column {data-width=650}
+-----------------------------------------------------------------------
+### Failing Grades per Student
+```{r}
+df.f<-df1 %>% group_by(name)%>%
+  count(grade)%>% 
+  filter(grade == "F")%>%
+  arrange(desc(n))%>%
+  select(name, n)
+names(df.f)<- c("Name", "Number_F")
+df.f<-df.f %>% inner_join(df%>%select(name,Attend), by = c("Name"="name"))
+
+fail_count(df.f)
+```
+
+Column {data-width=350}
+-----------------------------------------------------------------------
+
+### Hour
+
+```{r}
+avg.fail<- nrow(df1%>% filter(grade=="F"))/nrow(df1)
+
+fail_hour(df1, avg.fail.school, avg.fail)
+```
+
+### Failing Grades Compared to Attendance 
+
+
+```{r}
+grade_att(df.f)
+```
+
+Failing Grades by Demographics {data-navmenu="Academy 1" data-icon="fa-list"}
+=========================================================================
+
+Column {data-width=650}
+-----------------------------------------------------------------------
+### Ethnicity
+
+```{r}
+avg.fail<- nrow(df1%>% filter(grade=="F"))/nrow(df1)
+
+grades_eth(df1, avg.fail.school, avg.fail)
+```
+
+
+
+Column {data-width=350}
+-----------------------------------------------------------------------
+
+### ELL Status
+
+```{r}
+grades_ell(df1, avg.fail.school, avg.fail)
+```
+
+### IEP
+
+```{r}
+grades_iep(df1, avg.fail.school, avg.fail)
+```
+
+Top Students {data-navmenu="Academy 1" data-icon="fa-list"}
+===========================================================
+
+```{r}
+df.avg.gr<- df1 %>%
+  mutate(percent = ifelse(percent >100, 100, percent)) %>%
+  group_by(name)%>%
+  summarise(Avg_Grd=mean(percent, na.rm=T))%>%
+  arrange(desc(Avg_Grd))%>% 
+  mutate(Avg_Grd = round(Avg_Grd,1))%>%
+  rename(Name = name, 
+                     `Average Grade` = Avg_Grd)
+
+df.avg.gr %>%
+datatable(extensions = "Buttons",
+          options = list(dom = "lfrtipB",
+                         buttons = c('copy', 'csv', 'excel', 'pdf', 'print'),
+                         lengthMenu = list(c(10,25,50,-1),
+                                           c(10,25,50,"All"))))%>%
+  formatStyle(names(df.avg.gr)[2], 
+              background = styleColorBar(c(0,100), 'lightblue'),
+              backgroundSize = '98% 60%',
+              backgroundRepeat = 'no-repeat',
+              backgroundPosition = 'center')
+```
+
+
+
+
+
+
+
+
+
+Grades {data-navmenu="Academy 2" data-icon="fa-list"}
+======================================================
+
+Column {data-width=650}
+-----------------------------------------------------------------------
+
+### Timeseries
+
+```{r}
+df1 <- df_full %>% filter(Academy == "academy_2")
+grades.df<- tsgrades_update("aca2_ts.RDS", df1, date)
+
+tsgrades_plot(grades.df)
+```
+
+Column {data-width=350}
+-----------------------------------------------------------------------
+
+### Grades 
+
+```{r}
+grades_bar(df1)
+```
+
+### By Grade level
+
+```{r}
+grades_grade(df1)
+```
+
+
+Failing Grades {data-navmenu="Academy 2" data-icon="fa-list"}
+=======================================================================
+
+
+Column {data-width=650}
+-----------------------------------------------------------------------
+### Failing Grades per Student
+```{r}
+df.f<-df1 %>% group_by(name)%>%
+  count(grade)%>% 
+  filter(grade == "F")%>%
+  arrange(desc(n))%>%
+  select(name, n)
+names(df.f)<- c("Name", "Number_F")
+df.f<-df.f %>% inner_join(df%>%select(name,Attend), by = c("Name"="name"))
+
+fail_count(df.f)
+```
+
+Column {data-width=350}
+-----------------------------------------------------------------------
+
+### Hour
+
+```{r}
+avg.fail<- nrow(df1%>% filter(grade=="F"))/nrow(df1)
+
+fail_hour(df1, avg.fail.school, avg.fail)
+```
+
+### Failing Grades Compared to Attendance 
+
+
+```{r}
+grade_att(df.f)
+```
+
+Failing Grades by Demographics {data-navmenu="Academy 2" data-icon="fa-list"}
+=========================================================================
+
+Column {data-width=650}
+-----------------------------------------------------------------------
+### Ethnicity
+
+```{r}
+avg.fail<- nrow(df1%>% filter(grade=="F"))/nrow(df1)
+
+grades_eth(df1, avg.fail.school, avg.fail)
+```
+
+
+
+Column {data-width=350}
+-----------------------------------------------------------------------
+
+### ELL Status
+
+```{r}
+grades_ell(df1, avg.fail.school, avg.fail)
+```
+
+### IEP
+
+```{r}
+grades_iep(df1, avg.fail.school, avg.fail)
+```
+
+Top Students {data-navmenu="Academy 2" data-icon="fa-list"}
+===========================================================
+
+```{r}
+df.avg.gr<- df1 %>%
+  mutate(percent = ifelse(percent >100, 100, percent)) %>%
+  group_by(name)%>%
+  summarise(Avg_Grd=mean(percent, na.rm=T))%>%
+  arrange(desc(Avg_Grd))%>% 
+  mutate(Avg_Grd = round(Avg_Grd,1))%>%
+  rename(Name = name, 
+                     `Average Grade` = Avg_Grd)
+
+df.avg.gr %>%
+datatable(extensions = "Buttons",
+          options = list(dom = "lfrtipB",
+                         buttons = c('copy', 'csv', 'excel', 'pdf', 'print'),
+                         lengthMenu = list(c(10,25,50,-1),
+                                           c(10,25,50,"All"))))%>%
+  formatStyle(names(df.avg.gr)[2], 
+              background = styleColorBar(c(0,100), 'lightblue'),
+              backgroundSize = '98% 60%',
+              backgroundRepeat = 'no-repeat',
+              backgroundPosition = 'center')
+```
+
+
+
+
+
+
+
+
+Grades {data-navmenu="Academy 3" data-icon="fa-list"}
+======================================================
+
+Column {data-width=650}
+-----------------------------------------------------------------------
+
+### Timeseries
+
+```{r}
+df1 <- df_full %>% filter(Academy == "academy_3")
+grades.df<- tsgrades_update("aca3_ts.RDS", df1, date)
+
+tsgrades_plot(grades.df)
+```
+
+Column {data-width=350}
+-----------------------------------------------------------------------
+
+### Grades 
+
+```{r}
+grades_bar(df1)
+```
+
+### By Grade level
+
+```{r}
+grades_grade(df1)
+```
+
+
+Failing Grades {data-navmenu="Academy 3" data-icon="fa-list"}
+=======================================================================
+
+
+Column {data-width=650}
+-----------------------------------------------------------------------
+### Failing Grades per Student
+```{r}
+df.f<-df1 %>% group_by(name)%>%
+  count(grade)%>% 
+  filter(grade == "F")%>%
+  arrange(desc(n))%>%
+  select(name, n)
+names(df.f)<- c("Name", "Number_F")
+df.f<-df.f %>% inner_join(df%>%select(name,Attend), by = c("Name"="name"))
+
+fail_count(df.f)
+```
+
+Column {data-width=350}
+-----------------------------------------------------------------------
+
+### Hour
+
+```{r}
+fail_hour(df1, avg.fail.school, avg.fail)
+avg.fail<- nrow(df1%>% filter(grade=="F"))/nrow(df1)
+```
+
+### Failing Grades Compared to Attendance 
+
+
+```{r}
+grade_att(df.f)
+```
+
+Failing Grades by Demographics {data-navmenu="Academy 3" data-icon="fa-list"}
+=========================================================================
+
+Column {data-width=650}
+-----------------------------------------------------------------------
+### Ethnicity
+
+```{r}
+avg.fail<- nrow(df1%>% filter(grade=="F"))/nrow(df1)
+grades_eth(df1, avg.fail.school, avg.fail)
+```
+
+
+
+Column {data-width=350}
+-----------------------------------------------------------------------
+
+### ELL Status
+
+```{r}
+grades_ell(df1, avg.fail.school, avg.fail)
+df.ELL<- df1%>% count(ELL)  
+```
+
+### IEP
+
+```{r}
+grades_iep(df1, avg.fail.school, avg.fail)
+```
+
+Top Students {data-navmenu="Academy 3" data-icon="fa-list"}
+===========================================================
+
+```{r}
+df.avg.gr<- df1 %>%
+  mutate(percent = ifelse(percent >100, 100, percent)) %>%
+  group_by(name)%>%
+  summarise(Avg_Grd=mean(percent, na.rm=T))%>%
+  arrange(desc(Avg_Grd))%>% 
+  mutate(Avg_Grd = round(Avg_Grd,1))%>%
+  rename(Name = name, 
+                     `Average Grade` = Avg_Grd)
+
+df.avg.gr %>%
+datatable(extensions = "Buttons",           options = list(dom = "lfrtipB",                          buttons = c('copy', 'csv', 'excel', 'pdf', 'print'),                          lengthMenu = list(c(10,25,50,-1),                                            c(10,25,50,"All"))))%>%
+  formatStyle(names(df.avg.gr)[2], 
+              background = styleColorBar(c(0,100), 'lightblue'),
+              backgroundSize = '98% 60%',
+              backgroundRepeat = 'no-repeat',
+              backgroundPosition = 'center')
+```
+
+
+
+
+
